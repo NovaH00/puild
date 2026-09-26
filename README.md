@@ -108,3 +108,29 @@ copy("src/config.json", "build/config.json")
 # Remove files or directories
 rm("build", recursive=True)
 ```
+
+### 7. Logging & File Routing
+
+`puild` uses Python's standard `logging` library (`logging.getLogger("puild")`). You can route logs to a file, rotate files, or customize levels:
+
+```python
+from puild import Command, configure_logging
+
+# Route logs to both console and a log file
+configure_logging(log_file="build.log")
+
+# Or log strictly to a file without console output
+configure_logging(log_file="build.log", console=False)
+
+# Or with log rotation
+configure_logging(log_file="build.log", max_bytes=10_000_000, backup_count=3)
+```
+
+You can also attach standard Python `logging` handlers directly:
+
+```python
+import logging
+
+handler = logging.FileHandler("custom.log")
+logging.getLogger("puild").addHandler(handler)
+```

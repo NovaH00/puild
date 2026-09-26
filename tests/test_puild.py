@@ -1,11 +1,9 @@
-import os
-import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
 
-from puild.command import Command, Pipeline, Result, is_dry_run, set_dry_run
+from puild.command import Command, set_dry_run
 from puild.fs import copy, find_files, mkdir, needs_rebuild, rm
 from puild.logging import set_quiet
 
@@ -64,6 +62,7 @@ class TestCommand(unittest.TestCase):
 
     def test_log_indented_helper(self):
         import io
+
         from puild.logging import log_indented, set_quiet
         set_quiet(False)
         try:
@@ -168,6 +167,56 @@ class TestFilesystem(unittest.TestCase):
 
             # 4. Non-existent source -> raises FileNotFoundError
             self.assertRaises(FileNotFoundError, needs_rebuild, target, base / "missing.c")
+
+
+class TestLogging(unittest.TestCase):
+    def test_configure_logging_file(self):
+        import logging
+
+        from puild.logging import configure_logging, log_action
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_file = Path(tmpdir) / "test.log"
+            configure_logging(log_file=log_file, console=False, level=logging.INFO)
+
+            log_action("TestAct", "Hello from test action")
+            log_action("Failed", "Error description", "red")
+
+            self.assertTrue(log_file.exists())
+            content = log_file.read_text()
+            self.assertIn("TestAct: Hello from test action", content)
+            self.assertIn("Failed: Error description", content)
+            self.assertIn("[INFO ]", content)
+            self.assertIn("[ERROR]", content)
+            # Ensure no rich tags or ANSI escape codes leaked into the file
+            self.assertNotIn("[bold", content)
+            self.assertNotIn("\x1b[", content)
+
+            # Restore default logging for other tests
+            configure_logging(console=True, level=logging.INFO)
+
+    def test_command_stream_writes_to_file_log(self):
+        import logging
+
+        from puild import Command, configure_logging
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_file = Path(tmpdir) / "stream.log"
+            configure_logging(log_file=log_file, console=False, level=logging.INFO)
+
+            cmd = Command("python3", "-c", "print('streamed_file_line_1'); print('streamed_file_line_2')")
+            res = cmd.run(stream=True, text=True)
+            self.assertTrue(res.ok)
+
+            self.assertTrue(log_file.exists())
+            content = log_file.read_text()
+            self.assertIn("Run:", content)
+            self.assertIn("streamed_file_line_1", content)
+            self.assertIn("streamed_file_line_2", content)
+            self.assertIn("Success:", content)
+
+            # Restore default logging for other tests
+            configure_logging(console=True, level=logging.INFO)
 
 
 if __name__ == "__main__":

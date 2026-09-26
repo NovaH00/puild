@@ -14,6 +14,7 @@ from puild.logging import (
     get_default_indent,
     log_action,
     log_indented,
+    write_stream_to_file_handlers,
 )
 
 _DRY_RUN = False
@@ -261,6 +262,7 @@ class Command:
                     input=input,
                     stdout=f,
                     stderr=subprocess.PIPE if capture else None,
+                    check=False,
                 )
             stdout_res = empty_out
             stderr_res = res.stderr if capture and res.stderr is not None else empty_out
@@ -274,6 +276,7 @@ class Command:
                 env=merged_env,
                 input=input,
                 capture_output=False,
+                check=False,
             )
             stdout_res = empty_out
             stderr_res = empty_out
@@ -298,6 +301,7 @@ class Command:
                 env=merged_env,
                 input=input,
                 capture_output=True,
+                check=False,
             )
             stdout_res = res.stdout
             stderr_res = res.stderr
@@ -365,9 +369,9 @@ class Command:
         )
 
         if input_data is not None and proc.stdin:
-            if text and isinstance(input_data, str):
-                proc.stdin.write(input_data)
-            elif not text and isinstance(input_data, bytes):
+            if (text and isinstance(input_data, str)) or (
+                not text and isinstance(input_data, bytes)
+            ):
                 proc.stdin.write(input_data)
             proc.stdin.close()
 
@@ -384,8 +388,11 @@ class Command:
                             chunks.append(line)
                         if not line.strip():
                             dest_stream.write(line)
+                            write_stream_to_file_handlers(line)
                         else:
-                            dest_stream.write(f"{indent}{line}")
+                            formatted = f"{indent}{line}"
+                            dest_stream.write(formatted)
+                            write_stream_to_file_handlers(formatted)
                         dest_stream.flush()
                 else:
                     target = getattr(dest_stream, "buffer", dest_stream)
@@ -395,8 +402,11 @@ class Command:
                             chunks.append(line)
                         if not line.strip():
                             target.write(line)
+                            write_stream_to_file_handlers(line.decode("utf-8", errors="replace"))
                         else:
-                            target.write(indent_bytes + line)
+                            formatted_bytes = indent_bytes + line
+                            target.write(formatted_bytes)
+                            write_stream_to_file_handlers(formatted_bytes.decode("utf-8", errors="replace"))
                         target.flush()
             finally:
                 pipe.close()
@@ -526,8 +536,11 @@ class Pipeline:
                             chunks.append(line)
                             if not line.strip():
                                 dest_stream.write(line)
+                                write_stream_to_file_handlers(line)
                             else:
-                                dest_stream.write(f"{effective_indent}{line}")
+                                formatted = f"{effective_indent}{line}"
+                                dest_stream.write(formatted)
+                                write_stream_to_file_handlers(formatted)
                             dest_stream.flush()
                     else:
                         target = getattr(dest_stream, "buffer", dest_stream)
@@ -536,8 +549,11 @@ class Pipeline:
                             chunks.append(line)
                             if not line.strip():
                                 target.write(line)
+                                write_stream_to_file_handlers(line.decode("utf-8", errors="replace"))
                             else:
-                                target.write(indent_bytes + line)
+                                formatted_bytes = indent_bytes + line
+                                target.write(formatted_bytes)
+                                write_stream_to_file_handlers(formatted_bytes.decode("utf-8", errors="replace"))
                             target.flush()
                 finally:
                     pipe.close()
@@ -553,9 +569,9 @@ class Pipeline:
 
             if input is not None and processes[0].stdin:
                 try:
-                    if text and isinstance(input, str):
-                        processes[0].stdin.write(input)
-                    elif not text and isinstance(input, bytes):
+                    if (text and isinstance(input, str)) or (
+                        not text and isinstance(input, bytes)
+                    ):
                         processes[0].stdin.write(input)
                     processes[0].stdin.close()
                 except BrokenPipeError:
@@ -574,9 +590,9 @@ class Pipeline:
                 )
                 if len(processes) > 1 and processes[0].stdin:
                     try:
-                        if text and isinstance(input, str):
-                            processes[0].stdin.write(input)
-                        elif not text and isinstance(input, bytes):
+                        if (text and isinstance(input, str)) or (
+                            not text and isinstance(input, bytes)
+                        ):
                             processes[0].stdin.write(input)
                         processes[0].stdin.close()
                     except BrokenPipeError:
