@@ -53,6 +53,26 @@ class TestCommand(unittest.TestCase):
         self.assertIn("live_out", res.stdout)
         self.assertIn("live_err", res.stderr)
 
+    def test_stream_output_indentation(self):
+        import io
+        from unittest.mock import patch
+        cmd = Command("python3", "-c", "import sys; sys.stdout.write('line 1\\nline 2\\n')")
+        fake_stdout = io.StringIO()
+        with patch("sys.stdout", fake_stdout):
+            cmd.run(stream=True, text=True, indent="    ")
+        self.assertEqual(fake_stdout.getvalue(), "    line 1\n    line 2\n")
+
+    def test_log_indented_helper(self):
+        import io
+        from puild.logging import log_indented, set_quiet
+        set_quiet(False)
+        try:
+            fake_out = io.StringIO()
+            log_indented("alpha\n\nbeta", indent="    ", stream=fake_out)
+            self.assertEqual(fake_out.getvalue(), "    alpha\n\n    beta\n")
+        finally:
+            set_quiet(True)
+
     def test_dry_run_mode(self):
         cmd = Command("rm", "-rf", "/nonexistent_safely_ignored_12345")
         res = cmd.run(dry_run=True, text=True)

@@ -10,7 +10,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Self, overload
 
-from puild.logging import log_action
+from puild.logging import (
+    get_default_indent,
+    log_action,
+    log_indented,
+    set_default_indent,
+)
 
 _DRY_RUN = False
 
@@ -123,6 +128,7 @@ class Command:
             return Pipeline([self, other])
         elif isinstance(other, Pipeline):
             return Pipeline([self, *other.commands])
+        return NotImplemented
 
     def __gt__(self, target: str | Path) -> Command:
         """Redirect stdout to file (overwrite): cmd > 'output.txt'"""
@@ -147,9 +153,11 @@ class Command:
         log: bool = True,
         capture: bool = True,
         stream: bool = False,
+        indent: str | None = None,
         env: dict[str, str] | None = None,
         input: bytes | None = None,
         check: bool = False,
+        raw: bool = False,
         dry_run: bool | None = None,
     ) -> Result[bytes]: ...
 
@@ -162,9 +170,11 @@ class Command:
         log: bool = True,
         capture: bool = True,
         stream: bool = False,
+        indent: str | None = None,
         env: dict[str, str] | None = None,
         input: str | None = None,
         check: bool = False,
+        raw: bool = False,
         dry_run: bool | None = None,
     ) -> Result[str]: ...
 
@@ -177,9 +187,11 @@ class Command:
         log: bool = True,
         capture: bool = True,
         stream: bool = False,
+        indent: str | None = None,
         env: dict[str, str] | None = None,
         input: Any = None,
         check: bool = False,
+        raw: bool = False,
         dry_run: bool | None = None,
     ) -> Result[Any]: ...
 
@@ -191,13 +203,16 @@ class Command:
         log: bool = True,
         capture: bool = True,
         stream: bool = False,
+        indent: str | None = None,
         env: dict[str, str] | None = None,
         input: Any = None,
         check: bool = False,
+        raw: bool = False,
         dry_run: bool | None = None,
     ) -> Result[Any]:
         effective_cwd = str(cwd) if cwd is not None else self._cwd
         is_dry = _DRY_RUN if dry_run is None else dry_run
+        effective_indent = get_default_indent() if indent is None else indent
 
         cmd_display = " ".join(self.to_list())
         if self._redirect_stdout:
@@ -251,27 +266,8 @@ class Command:
             stdout_res = empty_out
             stderr_res = res.stderr if capture and res.stderr is not None else empty_out
             return_code = res.returncode
-        elif stream:
-            stdout_res, stderr_res, return_code = self._run_stream(
-                cmd_list=self.to_list(),
-                cwd=effective_cwd,
-                text=text,
-                env=merged_env,
-                input_data=input,
-            )
-        elif capture:
-            res = subprocess.run(
-                self.to_list(),
-                cwd=effective_cwd,
-                text=text,
-                env=merged_env,
-                input=input,
-                capture_output=True,
-            )
-            stdout_res = res.stdout
-            stderr_res = res.stderr
-            return_code = res.returncode
-        else:
+        elif raw:
+            # Raw interactive TTY execution without interception
             res = subprocess.run(
                 self.to_list(),
                 cwd=effective_cwd,
@@ -283,17 +279,54 @@ class Command:
             stdout_res = empty_out
             stderr_res = empty_out
             return_code = res.returncode
+        elif stream or not capture:
+            # Stream output live to terminal with indentation
+            stdout_res, stderr_res, return_code = self._run_stream(
+                cmd_list=self.to_list(),
+                cwd=effective_cwd,
+                text=text,
+                env=merged_env,
+                input_data=input,
+                indent=effective_indent,
+                collect_output=capture,
+            )
+        else:
+            # Default capture=True, stream=False
+            res = subprocess.run(
+                self.to_list(),
+                cwd=effective_cwd,
+                text=text,
+                env=merged_env,
+                input=input,
+                capture_output=True,
+            )
+            stdout_res = res.stdout
+            stderr_res = res.stderr
+            return_code = res.returncode
 
         elapsed = time.perf_counter() - start
 
         if log:
             if return_code != 0:
-                err_msg = (
-                    stderr_res
-                    if isinstance(stderr_res, str)
-                    else stderr_res.decode("utf-8", errors="replace")
-                )
-                log_action("Failed", err_msg.strip() or f"Exit code {return_code}", "red")
+                if stream or not capture:
+                    log_action(
+                        "Failed",
+                        f"Command failed with exit code {return_code}",
+                        "red",
+                    )
+                else:
+                    err_msg = (
+                        stderr_res
+                        if isinstance(stderr_res, str)
+                        else stderr_res.decode("utf-8", errors="replace")
+                    )
+                    log_action(
+                        "Failed",
+                        f"Command failed with exit code {return_code}",
+                        "red",
+                    )
+                    if err_msg.strip():
+                        log_indented(err_msg.strip(), indent=effective_indent)
             else:
                 log_action("Success", f"Took {elapsed:.3f}s", "green")
 
@@ -318,6 +351,8 @@ class Command:
         text: bool,
         env: dict[str, str],
         input_data: Any,
+        indent: str,
+        collect_output: bool = True,
     ) -> tuple[Any, Any, int]:
         stdin_setting = subprocess.PIPE if input_data is not None else None
         proc = subprocess.Popen(
@@ -346,14 +381,23 @@ class Command:
             try:
                 if text:
                     for line in iter(pipe.readline, ""):
-                        chunks.append(line)
-                        dest_stream.write(line)
+                        if collect_output:
+                            chunks.append(line)
+                        if not line.strip():
+                            dest_stream.write(line)
+                        else:
+                            dest_stream.write(f"{indent}{line}")
                         dest_stream.flush()
                 else:
                     target = getattr(dest_stream, "buffer", dest_stream)
+                    indent_bytes = indent.encode("utf-8")
                     for line in iter(pipe.readline, b""):
-                        chunks.append(line)
-                        target.write(line)
+                        if collect_output:
+                            chunks.append(line)
+                        if not line.strip():
+                            target.write(line)
+                        else:
+                            target.write(indent_bytes + line)
                         target.flush()
             finally:
                 pipe.close()
@@ -371,10 +415,19 @@ class Command:
         t_out.join()
         t_err.join()
 
-        if text:
-            return "".join(stdout_chunks), "".join(stderr_chunks), proc.returncode
-        else:
-            return b"".join(stdout_chunks), b"".join(stderr_chunks), proc.returncode
+        empty = "" if text else b""
+        out_res = (
+            ("".join(stdout_chunks) if text else b"".join(stdout_chunks))
+            if collect_output
+            else empty
+        )
+        err_res = (
+            ("".join(stderr_chunks) if text else b"".join(stderr_chunks))
+            if collect_output
+            else empty
+        )
+
+        return out_res, err_res, proc.returncode
 
 
 class Pipeline:
@@ -397,6 +450,8 @@ class Pipeline:
         cwd: str | Path = ".",
         text: bool = True,
         log: bool = True,
+        stream: bool = False,
+        indent: str | None = None,
         input: str | bytes | None = None,
         check: bool = False,
         dry_run: bool | None = None,
@@ -404,6 +459,7 @@ class Pipeline:
         is_dry = _DRY_RUN if dry_run is None else dry_run
         cmd_display = " | ".join(" ".join(c.to_list()) for c in self.commands)
         effective_cwd = str(cwd)
+        effective_indent = get_default_indent() if indent is None else indent
 
         if log:
             if effective_cwd != ".":
@@ -429,7 +485,6 @@ class Pipeline:
 
         for i, cmd in enumerate(self.commands):
             is_first = i == 0
-            is_last = i == len(self.commands) - 1
 
             if is_first:
                 stdin = subprocess.PIPE if input is not None else None
@@ -458,10 +513,46 @@ class Pipeline:
             processes.append(proc)
 
         last_proc = processes[-1]
-        if input is not None and processes[0].stdin:
-            stdout_res, stderr_res = last_proc.communicate(input=input if len(processes) == 1 else None)
-            if len(processes) > 1 and processes[0].stdin:
-                # If there are multiple processes, send input to first
+
+        if stream:
+            stdout_chunks: list[Any] = []
+            stderr_chunks: list[Any] = []
+
+            def reader(pipe, chunks, dest_stream):
+                if pipe is None:
+                    return
+                try:
+                    if text:
+                        for line in iter(pipe.readline, ""):
+                            chunks.append(line)
+                            if not line.strip():
+                                dest_stream.write(line)
+                            else:
+                                dest_stream.write(f"{effective_indent}{line}")
+                            dest_stream.flush()
+                    else:
+                        target = getattr(dest_stream, "buffer", dest_stream)
+                        indent_bytes = effective_indent.encode("utf-8")
+                        for line in iter(pipe.readline, b""):
+                            chunks.append(line)
+                            if not line.strip():
+                                target.write(line)
+                            else:
+                                target.write(indent_bytes + line)
+                            target.flush()
+                finally:
+                    pipe.close()
+
+            t_out = threading.Thread(
+                target=reader, args=(last_proc.stdout, stdout_chunks, sys.stdout)
+            )
+            t_err = threading.Thread(
+                target=reader, args=(last_proc.stderr, stderr_chunks, sys.stderr)
+            )
+            t_out.start()
+            t_err.start()
+
+            if input is not None and processes[0].stdin:
                 try:
                     if text and isinstance(input, str):
                         processes[0].stdin.write(input)
@@ -470,9 +561,30 @@ class Pipeline:
                     processes[0].stdin.close()
                 except BrokenPipeError:
                     pass
-                stdout_res, stderr_res = last_proc.communicate()
+
+            last_proc.wait()
+            t_out.join()
+            t_err.join()
+
+            stdout_res = "".join(stdout_chunks) if text else b"".join(stdout_chunks)
+            stderr_res = "".join(stderr_chunks) if text else b"".join(stderr_chunks)
         else:
-            stdout_res, stderr_res = last_proc.communicate()
+            if input is not None and processes[0].stdin:
+                stdout_res, stderr_res = last_proc.communicate(
+                    input=input if len(processes) == 1 else None
+                )
+                if len(processes) > 1 and processes[0].stdin:
+                    try:
+                        if text and isinstance(input, str):
+                            processes[0].stdin.write(input)
+                        elif not text and isinstance(input, bytes):
+                            processes[0].stdin.write(input)
+                        processes[0].stdin.close()
+                    except BrokenPipeError:
+                        pass
+                    stdout_res, stderr_res = last_proc.communicate()
+            else:
+                stdout_res, stderr_res = last_proc.communicate()
 
         for p in processes[:-1]:
             if p.stderr:
@@ -484,12 +596,25 @@ class Pipeline:
 
         if log:
             if return_code != 0:
-                err_msg = (
-                    stderr_res
-                    if isinstance(stderr_res, str)
-                    else stderr_res.decode("utf-8", errors="replace")
-                )
-                log_action("Failed", err_msg.strip() or f"Exit code {return_code}", "red")
+                if stream:
+                    log_action(
+                        "Failed",
+                        f"Command failed with exit code {return_code}",
+                        "red",
+                    )
+                else:
+                    err_msg = (
+                        stderr_res
+                        if isinstance(stderr_res, str)
+                        else stderr_res.decode("utf-8", errors="replace")
+                    )
+                    log_action(
+                        "Failed",
+                        f"Command failed with exit code {return_code}",
+                        "red",
+                    )
+                    if err_msg.strip():
+                        log_indented(err_msg.strip(), indent=effective_indent)
             else:
                 log_action("Success", f"Took {elapsed:.3f}s", "green")
 

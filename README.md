@@ -61,15 +61,20 @@ cmd = Command("echo", "second step completed") >> "build.log"
 cmd.run()
 ```
 
-### 4. Live Streaming Output
+### 4. Live Streaming Output & Indentation
 
-Stream output to stdout/stderr in real-time while still capturing the result:
+Stream command output to stdout/stderr in real-time. Output is automatically indented (default 4 spaces) so it stays visually separated from puild's action logs:
 
 ```python
-from puild import Command
+from puild import Command, set_default_indent
 
-cmd = Command("pytest", "-v")
-res = cmd.run(stream=True, text=True)
+# Stream with default 4-space indentation
+cmd = Command("npm", "install")
+cmd.run(stream=True, text=True)
+
+# Custom indentation per-command or globally
+cmd.run(stream=True, indent="  ")  # 2 spaces
+set_default_indent("    ")        # Set global default
 ```
 
 ### 5. Incremental Builds (`needs_rebuild`)
