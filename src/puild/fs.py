@@ -137,7 +137,7 @@ def find_files(
     directory: str | Path = ".",
     pattern: str = "*",
     *,
-    recursive: bool = True,
+    recursive: bool = False,
 ) -> list[Path]:
     """Find files matching pattern in directory."""
     dir_path = Path(directory)

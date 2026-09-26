@@ -14,7 +14,6 @@ from puild.logging import (
     get_default_indent,
     log_action,
     log_indented,
-    set_default_indent,
 )
 
 _DRY_RUN = False
