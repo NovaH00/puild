@@ -1,0 +1,18 @@
+[project]
+name = "puild"
+version = "0.1.0"
+description = "A lightweight, modern build tool and command runner for Python."
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "rich>=15.0.0",
+]
+
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13"]
+build-backend = "uv_build"
+
+[project.scripts]
+run = "puild.main:main"
+puild = "puild.main:main"
